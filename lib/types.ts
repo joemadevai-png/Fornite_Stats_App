@@ -11,6 +11,7 @@ export interface Session {
   played_at: string; // ISO date string
   label: string;
   created_at?: string;
+  archived_at?: string | null;
   games: Game[];
 }
 
