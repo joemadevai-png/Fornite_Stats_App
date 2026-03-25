@@ -1,22 +1,83 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { createSession } from "@/lib/queries";
+
+const DRAFT_KEY = "fort-stats-draft";
 
 function formatLabel(date: Date): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+interface Draft {
+  date: string;
+  label: string;
+  games: { place: string; kills: string }[];
+}
+
+function loadDraft(): Draft | null {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveDraft(draft: Draft) {
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // ignore
+  }
+}
+
+function clearDraft() {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export default function LogSessionPage() {
   const router = useRouter();
 
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  const [label, setLabel] = useState(formatLabel(new Date()));
-  const [games, setGames] = useState([{ place: "", kills: "" }]);
+  const [date, setDate] = useState("");
+  const [label, setLabel] = useState("");
+  const [games, setGames] = useState<{ place: string; kills: string }[]>([{ place: "", kills: "" }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate from sessionStorage on mount
+  useEffect(() => {
+    const draft = loadDraft();
+    if (draft) {
+      setDate(draft.date);
+      setLabel(draft.label);
+      setGames(draft.games.length > 0 ? draft.games : [{ place: "", kills: "" }]);
+    } else {
+      const today = new Date().toISOString().split("T")[0];
+      setDate(today);
+      setLabel(formatLabel(new Date()));
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persist to sessionStorage on every change
+  const persist = useCallback((d: string, l: string, g: { place: string; kills: string }[]) => {
+    saveDraft({ date: d, label: l, games: g });
+  }, []);
+
+  useEffect(() => {
+    if (hydrated) {
+      persist(date, label, games);
+    }
+  }, [date, label, games, hydrated, persist]);
 
   function handleDateChange(value: string) {
     setDate(value);
@@ -60,11 +121,11 @@ export default function LogSessionPage() {
       const kills = parseInt(games[i].kills, 10);
 
       if (isNaN(place) || place < 1 || place > 100) {
-        setError(`Game ${i + 1}: Place must be between 1 and 100.`);
+        setError(`Game ${i + 1}: Place must be 1-100.`);
         return;
       }
       if (isNaN(kills) || kills < 0 || kills > 99) {
-        setError(`Game ${i + 1}: Kills must be between 0 and 99.`);
+        setError(`Game ${i + 1}: Kills must be 0-99.`);
         return;
       }
       parsedGames.push({ place, kills });
@@ -78,6 +139,7 @@ export default function LogSessionPage() {
         label: label.trim(),
         games: parsedGames,
       });
+      clearDraft();
       router.push("/sessions");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save session.");
@@ -86,97 +148,105 @@ export default function LogSessionPage() {
     }
   }
 
+  if (!hydrated) return null;
+
   return (
-    <div className="space-y-6 pt-6 pb-4">
+    <div className="space-y-5 pt-6 pb-4">
       <h1 className="text-3xl font-bold tracking-tight text-foreground">
         Log Session
       </h1>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-5">
         {/* Date + Label */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-sm text-muted">Date</label>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">Date</label>
             <input
               type="date"
               value={date}
               onChange={(e) => handleDateChange(e.target.value)}
               required
-              className="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground"
+              className="w-full bg-surface border border-border rounded-lg px-3 py-2.5 text-sm text-foreground"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-sm text-muted">Label</label>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">Label</label>
             <input
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               required
-              className="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground"
+              className="w-full bg-surface border border-border rounded-lg px-3 py-2.5 text-sm text-foreground"
             />
           </div>
         </div>
 
-        {/* Games */}
-        <div className="space-y-3">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-muted">
-            Games
-          </h2>
+        {/* Games — compact table */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-xs font-medium uppercase tracking-wide text-muted">
+              Games
+            </h2>
+            <span className="text-xs text-muted">{games.length} game{games.length !== 1 ? "s" : ""}</span>
+          </div>
 
-          {games.map((game, index) => (
-            <div
-              key={index}
-              className="bg-surface rounded-xl p-4"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-foreground">
-                  Game {index + 1}
-                </span>
-                {games.length > 1 && (
+          <div className="rounded-xl border border-border bg-surface overflow-hidden">
+            {/* Header */}
+            <div className="grid grid-cols-[40px_1fr_1fr_32px] gap-2 px-3 py-2 border-b border-border">
+              <span className="text-xs font-medium text-muted">#</span>
+              <span className="text-xs font-medium text-muted">Place</span>
+              <span className="text-xs font-medium text-muted">Kills</span>
+              <span />
+            </div>
+
+            {/* Rows */}
+            {games.map((game, index) => (
+              <div
+                key={index}
+                className={`grid grid-cols-[40px_1fr_1fr_32px] gap-2 items-center px-3 py-1.5 ${
+                  index < games.length - 1 ? "border-b border-border/50" : ""
+                }`}
+              >
+                <span className="text-sm font-medium text-muted">{index + 1}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={100}
+                  placeholder="1-100"
+                  value={game.place}
+                  onChange={(e) => updateGame(index, "place", e.target.value)}
+                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50"
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={99}
+                  placeholder="0-99"
+                  value={game.kills}
+                  onChange={(e) => updateGame(index, "kills", e.target.value)}
+                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50"
+                />
+                {games.length > 1 ? (
                   <button
                     type="button"
                     onClick={() => removeGame(index)}
-                    className="text-muted hover:text-red transition-colors text-lg leading-none px-1"
+                    className="flex items-center justify-center text-muted hover:text-red transition-colors text-base leading-none"
                   >
                     &times;
                   </button>
+                ) : (
+                  <span />
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-muted">Place</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={100}
-                    placeholder="1-100"
-                    value={game.place}
-                    onChange={(e) => updateGame(index, "place", e.target.value)}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-muted">Kills</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={0}
-                    max={99}
-                    placeholder="0-99"
-                    value={game.kills}
-                    onChange={(e) => updateGame(index, "kills", e.target.value)}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground"
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
 
           <button
             type="button"
             onClick={addGame}
-            className="w-full rounded-xl border-2 border-dashed border-border py-3 text-sm font-medium text-muted hover:border-muted-foreground hover:text-muted-foreground transition-colors"
+            className="mt-2 w-full rounded-lg border border-dashed border-border py-2 text-sm font-medium text-muted hover:border-blue hover:text-blue transition-colors"
           >
             + Add Game
           </button>

@@ -4,6 +4,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Fort Stats",
   description: "Track your Fortnite session stats",
+  icons: {
+    icon: "/favicon.svg?v=2",
+    apple: "/favicon.svg?v=2",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

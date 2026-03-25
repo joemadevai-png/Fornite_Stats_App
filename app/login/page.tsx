@@ -1,74 +1,96 @@
 "use client";
 
-import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  async function verify(passcode: string) {
     setLoading(true);
-    setError(null);
-    setSuccess(false);
+    setError(false);
 
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
+    const res = await fetch("/api/verify-passcode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passcode }),
     });
 
-    if (authError) {
-      setError(authError.message);
+    if (res.ok) {
+      router.push("/dashboard");
     } else {
-      setSuccess(true);
+      setError(true);
+      setCode("");
+      setLoading(false);
+      inputRef.current?.focus();
     }
+  }
 
-    setLoading(false);
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value.replace(/\D/g, "").slice(0, 4);
+    setCode(val);
+    setError(false);
+
+    if (val.length === 4) {
+      verify(val);
+    }
   }
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8">
-        <h1 className="text-center text-3xl font-bold text-foreground">
-          Fort Stats
-        </h1>
-        <p className="mt-2 text-center text-sm text-muted">
-          Track your Fortnite session stats
-        </p>
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center">
+        <h1 className="text-3xl font-bold text-foreground">Fort Stats</h1>
+        <p className="mt-2 text-sm text-muted">Enter passcode</p>
 
-        <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-          <input
-            type="email"
-            placeholder="Email address"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-blue"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-blue px-4 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
-          >
-            {loading ? "Sending..." : "Send Magic Link"}
-          </button>
-        </form>
+        <div className="mt-8 flex justify-center gap-3">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className={`flex h-14 w-12 items-center justify-center rounded-lg border-2 text-2xl font-bold transition-colors ${
+                error
+                  ? "border-red"
+                  : code.length > i
+                    ? "border-blue text-foreground"
+                    : "border-border text-muted"
+              }`}
+            >
+              {code[i] ? "\u2022" : ""}
+            </div>
+          ))}
+        </div>
 
-        {success && (
-          <p className="mt-4 text-center text-sm text-green">
-            Check your email for the magic link!
-          </p>
-        )}
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          autoComplete="one-time-code"
+          value={code}
+          onChange={handleChange}
+          disabled={loading}
+          className="absolute opacity-0 pointer-events-none"
+          aria-label="Passcode input"
+        />
+
+        {/* Invisible tap target to refocus input */}
+        <div
+          className="mt-4 h-8 cursor-text"
+          onClick={() => inputRef.current?.focus()}
+        />
+
         {error && (
-          <p className="mt-4 text-center text-sm text-red">
-            {error}
-          </p>
+          <p className="text-sm text-red">Wrong code</p>
+        )}
+        {loading && (
+          <p className="text-sm text-muted">Checking...</p>
         )}
       </div>
     </div>
