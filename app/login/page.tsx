@@ -46,7 +46,10 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center">
+      <div
+        className="relative w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center cursor-text"
+        onClick={() => inputRef.current?.focus()}
+      >
         <h1 className="text-3xl font-bold text-foreground">Fort Stats</h1>
         <p className="mt-2 text-sm text-muted">Enter passcode</p>
 
@@ -76,22 +79,18 @@ export default function LoginPage() {
           value={code}
           onChange={handleChange}
           disabled={loading}
-          className="absolute opacity-0 pointer-events-none"
+          className="absolute top-0 left-0 w-full h-full opacity-0 cursor-text"
           aria-label="Passcode input"
         />
 
-        {/* Invisible tap target to refocus input */}
-        <div
-          className="mt-4 h-8 cursor-text"
-          onClick={() => inputRef.current?.focus()}
-        />
-
-        {error && (
-          <p className="text-sm text-red">Wrong code</p>
-        )}
-        {loading && (
-          <p className="text-sm text-muted">Checking...</p>
-        )}
+        <div className="mt-4 h-6">
+          {error && (
+            <p className="text-sm text-red">Wrong code</p>
+          )}
+          {loading && (
+            <p className="text-sm text-muted">Checking...</p>
+          )}
+        </div>
       </div>
     </div>
   );
