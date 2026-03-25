@@ -46,41 +46,22 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
-      <div
-        className="relative w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center cursor-text"
-        onClick={() => inputRef.current?.focus()}
-      >
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center">
         <h1 className="text-3xl font-bold text-foreground">Fort Stats</h1>
         <p className="mt-2 text-sm text-muted">Enter passcode</p>
 
-        <div className="mt-8 flex justify-center gap-3">
-          {[0, 1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className={`flex h-14 w-12 items-center justify-center rounded-lg border-2 text-2xl font-bold transition-colors ${
-                error
-                  ? "border-red"
-                  : code.length > i
-                    ? "border-blue text-foreground"
-                    : "border-border text-muted"
-              }`}
-            >
-              {code[i] ? "\u2022" : ""}
-            </div>
-          ))}
-        </div>
-
         <input
           ref={inputRef}
-          type="text"
+          type="password"
           inputMode="numeric"
           pattern="[0-9]*"
+          maxLength={4}
           autoComplete="one-time-code"
           value={code}
           onChange={handleChange}
           disabled={loading}
-          className="absolute top-0 left-0 w-full h-full opacity-0 cursor-text"
-          aria-label="Passcode input"
+          placeholder="----"
+          className="mt-8 w-40 mx-auto block bg-background border-2 border-border rounded-xl px-4 py-4 text-center text-2xl font-bold tracking-[0.5em] text-foreground placeholder:text-muted/40 focus:border-blue focus:outline-none transition-colors"
         />
 
         <div className="mt-4 h-6">
