@@ -1,9 +1,13 @@
+export const MAP_NAMES = ["Venture", "Elite Stronghold", "Slurp Rush"] as const;
+export type MapName = (typeof MAP_NAMES)[number];
+
 export interface Game {
   id?: string;
   session_id?: string;
   game_order: number;
   place: number;
   kills: number;
+  map?: MapName | null;
 }
 
 export interface Session {
@@ -13,6 +17,16 @@ export interface Session {
   created_at?: string;
   archived_at?: string | null;
   games: Game[];
+}
+
+export interface MapStat {
+  map: MapName;
+  games: number;
+  wins: number;
+  winRate: number;
+  top5Rate: number;
+  avgKills: number;
+  avgPlace: number;
 }
 
 export interface SessionData {
@@ -74,4 +88,6 @@ export interface StatsResult {
   winsUnder5: number;
   sessionData: SessionData[];
   placeCounts: Record<number, number>;
+  mapStats: MapStat[];
+  taggedMapGames: number;
 }

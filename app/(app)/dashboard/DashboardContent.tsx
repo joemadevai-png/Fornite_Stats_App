@@ -70,6 +70,8 @@ export default function DashboardContent({
     wins5to9,
     winsUnder5,
     sessionData,
+    mapStats,
+    taggedMapGames,
   } = stats;
 
   const winKillBuckets = [
@@ -209,6 +211,62 @@ export default function DashboardContent({
             <p className="text-xs text-muted-foreground">Clutch wins (10+ kills)</p>
           </div>
         </div>
+      </div>
+
+      {/* By Map */}
+      <div className="rounded-xl border border-border bg-surface p-4">
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted">
+            By Map
+          </h2>
+          <span className="text-xs text-muted">
+            {taggedMapGames} of {totalGames} games tagged
+          </span>
+        </div>
+
+        {mapStats.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Tag a map when logging your next session to see a map-by-map breakdown here.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {/* Header row */}
+            <div className="grid grid-cols-[1fr_44px_56px_56px_44px] gap-2 px-1 text-[10px] font-medium uppercase tracking-wide text-muted">
+              <span>Map</span>
+              <span className="text-right">Games</span>
+              <span className="text-right">Win %</span>
+              <span className="text-right">Top 5 %</span>
+              <span className="text-right">Avg K</span>
+            </div>
+
+            {mapStats.map((m) => (
+              <div
+                key={m.map}
+                className="grid grid-cols-[1fr_44px_56px_56px_44px] items-center gap-2 rounded-lg border border-border bg-background px-3 py-2"
+              >
+                <span className="truncate text-sm font-medium text-foreground">
+                  {m.map}
+                </span>
+                <span className="text-right text-sm text-foreground">
+                  {m.games}
+                </span>
+                <span className="text-right text-sm font-semibold" style={{ color: "#059669" }}>
+                  {m.winRate.toFixed(0)}%
+                </span>
+                <span className="text-right text-sm text-foreground">
+                  {m.top5Rate.toFixed(0)}%
+                </span>
+                <span className="text-right text-sm text-foreground">
+                  {m.avgKills.toFixed(1)}
+                </span>
+              </div>
+            ))}
+
+            <p className="pt-1 text-[11px] text-muted">
+              Avg place — {mapStats.map((m) => `${m.map}: ${m.avgPlace.toFixed(1)}`).join(" · ")}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* How You Win */}

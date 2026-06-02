@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { createSession } from "@/lib/queries";
+import { MapName } from "@/lib/types";
 
 const DRAFT_KEY = "fort-stats-draft";
 
@@ -11,17 +12,45 @@ function formatLabel(date: Date): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+interface GameDraft {
+  place: string;
+  kills: string;
+  map: MapName | null;
+}
+
 interface Draft {
   date: string;
   label: string;
-  games: { place: string; kills: string }[];
+  games: GameDraft[];
+}
+
+function emptyGame(): GameDraft {
+  return { place: "", kills: "", map: null };
+}
+
+function nextMap(cur: MapName | null): MapName | null {
+  if (cur === null) return "Venture";
+  if (cur === "Venture") return "Elite Stronghold";
+  if (cur === "Elite Stronghold") return "Slurp Rush";
+  return null; // Slurp Rush -> back to empty
 }
 
 function loadDraft(): Draft | null {
   try {
     const raw = sessionStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw) as Partial<Draft>;
+    // Backfill `map` on older drafts that predate the field
+    const games = (parsed.games || []).map((g) => ({
+      place: g.place ?? "",
+      kills: g.kills ?? "",
+      map: (g as GameDraft).map ?? null,
+    }));
+    return {
+      date: parsed.date || "",
+      label: parsed.label || "",
+      games,
+    };
   } catch {
     return null;
   }
@@ -48,7 +77,7 @@ export default function LogSessionPage() {
 
   const [date, setDate] = useState("");
   const [label, setLabel] = useState("");
-  const [games, setGames] = useState<{ place: string; kills: string }[]>([{ place: "", kills: "" }]);
+  const [games, setGames] = useState<GameDraft[]>([emptyGame()]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -59,7 +88,7 @@ export default function LogSessionPage() {
     if (draft) {
       setDate(draft.date);
       setLabel(draft.label);
-      setGames(draft.games.length > 0 ? draft.games : [{ place: "", kills: "" }]);
+      setGames(draft.games.length > 0 ? draft.games : [emptyGame()]);
     } else {
       const today = new Date().toISOString().split("T")[0];
       setDate(today);
@@ -69,7 +98,7 @@ export default function LogSessionPage() {
   }, []);
 
   // Persist to sessionStorage on every change
-  const persist = useCallback((d: string, l: string, g: { place: string; kills: string }[]) => {
+  const persist = useCallback((d: string, l: string, g: GameDraft[]) => {
     saveDraft({ date: d, label: l, games: g });
   }, []);
 
@@ -93,8 +122,14 @@ export default function LogSessionPage() {
     );
   }
 
+  function cycleMap(index: number) {
+    setGames((prev) =>
+      prev.map((g, i) => (i === index ? { ...g, map: nextMap(g.map) } : g))
+    );
+  }
+
   function addGame() {
-    setGames((prev) => [...prev, { place: "", kills: "" }]);
+    setGames((prev) => [...prev, emptyGame()]);
   }
 
   function removeGame(index: number) {
@@ -115,10 +150,11 @@ export default function LogSessionPage() {
       return;
     }
 
-    const parsedGames: { place: number; kills: number }[] = [];
+    const parsedGames: { place: number; kills: number; map: MapName }[] = [];
     for (let i = 0; i < games.length; i++) {
       const place = parseInt(games[i].place, 10);
       const kills = parseInt(games[i].kills, 10);
+      const map = games[i].map;
 
       if (isNaN(place) || place < 1 || place > 100) {
         setError(`Game ${i + 1}: Place must be 1-100.`);
@@ -128,7 +164,11 @@ export default function LogSessionPage() {
         setError(`Game ${i + 1}: Kills must be 0-99.`);
         return;
       }
-      parsedGames.push({ place, kills });
+      if (map === null) {
+        setError(`Game ${i + 1}: Tap the map button to pick a map.`);
+        return;
+      }
+      parsedGames.push({ place, kills, map });
     }
 
     setSaving(true);
@@ -192,10 +232,11 @@ export default function LogSessionPage() {
 
           <div className="rounded-xl border border-border bg-surface overflow-hidden">
             {/* Header */}
-            <div className="grid grid-cols-[40px_1fr_1fr_32px] gap-2 px-3 py-2 border-b border-border">
+            <div className="grid grid-cols-[28px_1fr_1fr_1.4fr_28px] gap-2 px-3 py-2 border-b border-border">
               <span className="text-xs font-medium text-muted">#</span>
               <span className="text-xs font-medium text-muted">Place</span>
               <span className="text-xs font-medium text-muted">Kills</span>
+              <span className="text-xs font-medium text-muted">Map</span>
               <span />
             </div>
 
@@ -203,7 +244,7 @@ export default function LogSessionPage() {
             {games.map((game, index) => (
               <div
                 key={index}
-                className={`grid grid-cols-[40px_1fr_1fr_32px] gap-2 items-center px-3 py-1.5 ${
+                className={`grid grid-cols-[28px_1fr_1fr_1.4fr_28px] gap-2 items-center px-3 py-1.5 ${
                   index < games.length - 1 ? "border-b border-border/50" : ""
                 }`}
               >
@@ -228,6 +269,22 @@ export default function LogSessionPage() {
                   onChange={(e) => updateGame(index, "kills", e.target.value)}
                   className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50"
                 />
+                <button
+                  type="button"
+                  onClick={() => cycleMap(index)}
+                  aria-label={
+                    game.map
+                      ? `Map: ${game.map}. Tap to change.`
+                      : "Tap to pick a map"
+                  }
+                  className={`w-full rounded-md px-2 py-1.5 text-xs font-medium text-center truncate transition-colors border ${
+                    game.map
+                      ? "bg-background border-blue text-foreground"
+                      : "bg-background border-border text-muted/70"
+                  }`}
+                >
+                  {game.map ?? "Tap to pick"}
+                </button>
                 {games.length > 1 ? (
                   <button
                     type="button"

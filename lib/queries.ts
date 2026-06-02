@@ -1,4 +1,4 @@
-import { Session } from "./types";
+import { Session, MapName } from "./types";
 import { SupabaseClient } from "@supabase/supabase-js";
 
 export async function fetchAllSessions(supabase: SupabaseClient): Promise<Session[]> {
@@ -56,13 +56,18 @@ async function attachGames(supabase: SupabaseClient, sessions: Record<string, un
       game_order: g.game_order,
       place: g.place,
       kills: g.kills,
+      map: (g.map ?? null) as MapName | null,
     })),
   }));
 }
 
 export async function createSession(
   supabase: SupabaseClient,
-  session: { played_at: string; label: string; games: { place: number; kills: number }[] }
+  session: {
+    played_at: string;
+    label: string;
+    games: { place: number; kills: number; map: MapName }[];
+  }
 ): Promise<string> {
   const { data, error: sessionError } = await supabase
     .from("sessions")
@@ -78,6 +83,7 @@ export async function createSession(
     game_order: i + 1,
     place: g.place,
     kills: g.kills,
+    map: g.map,
   }));
 
   const { error: gamesError } = await supabase.from("games").insert(gameRows);
