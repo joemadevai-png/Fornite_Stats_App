@@ -1,4 +1,4 @@
-export const MAP_NAMES = ["Venture", "Elite Stronghold", "Slurp Rush"] as const;
+export const MAP_NAMES = ["Venture", "Elite Stronghold", "Slurp Rush", "Adobe"] as const;
 export type MapName = (typeof MAP_NAMES)[number];
 
 export interface Game {
