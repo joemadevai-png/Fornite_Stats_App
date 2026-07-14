@@ -1,27 +1,26 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { createSession } from "@/lib/queries";
 import { MapName } from "@/lib/types";
 
-const DRAFT_KEY = "fort-stats-draft";
+const LEGACY_DRAFT_KEY = "fort-stats-draft";
 
 function formatLabel(date: Date): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function todayISO(): string {
+  return new Date().toISOString().split("T")[0];
 }
 
 interface GameDraft {
   place: string;
   kills: string;
   map: MapName | null;
-}
-
-interface Draft {
-  date: string;
-  label: string;
-  games: GameDraft[];
 }
 
 function emptyGame(): GameDraft {
@@ -33,23 +32,34 @@ function nextMap(cur: MapName | null): MapName | null {
   if (cur === "Venture") return "Elite Stronghold";
   if (cur === "Elite Stronghold") return "Slurp Rush";
   if (cur === "Slurp Rush") return "Adobe";
-  return null; // Adobe -> back to empty
+  return null;
 }
 
-function loadDraft(): Draft | null {
-  try {
-    const raw = sessionStorage.getItem(DRAFT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Draft>;
-    // Backfill `map` on older drafts that predate the field
-    const games = (parsed.games || []).map((g) => ({
-      place: g.place ?? "",
-      kills: g.kills ?? "",
-      map: (g as GameDraft).map ?? null,
+function normalizeGames(raw: unknown): GameDraft[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((g): g is Record<string, unknown> => typeof g === "object" && g !== null)
+    .map((g) => ({
+      place: typeof g.place === "string" ? g.place : "",
+      kills: typeof g.kills === "string" ? g.kills : "",
+      map: (g.map as MapName | null | undefined) ?? null,
     }));
+}
+
+function loadLegacyDraft(): { date: string; label: string; games: GameDraft[] } | null {
+  try {
+    const raw = sessionStorage.getItem(LEGACY_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const games = normalizeGames(parsed?.games);
+    const nonEmpty =
+      (parsed?.date && parsed.date.length > 0) ||
+      (parsed?.label && parsed.label.length > 0) ||
+      games.some((g) => g.place || g.kills || g.map);
+    if (!nonEmpty) return null;
     return {
-      date: parsed.date || "",
-      label: parsed.label || "",
+      date: typeof parsed?.date === "string" ? parsed.date : "",
+      label: typeof parsed?.label === "string" ? parsed.label : "",
       games,
     };
   } catch {
@@ -57,17 +67,9 @@ function loadDraft(): Draft | null {
   }
 }
 
-function saveDraft(draft: Draft) {
+function clearLegacyDraft() {
   try {
-    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  } catch {
-    // ignore
-  }
-}
-
-function clearDraft() {
-  try {
-    sessionStorage.removeItem(DRAFT_KEY);
+    sessionStorage.removeItem(LEGACY_DRAFT_KEY);
   } catch {
     // ignore
   }
@@ -82,32 +84,120 @@ export default function LogSessionPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [live, setLive] = useState(false);
 
-  // Hydrate from sessionStorage on mount
+  const clientIdRef = useRef<string>("");
+  const skipNextPersistRef = useRef(false);
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
+
+  // Hydrate from Supabase (with legacy sessionStorage fallback) and subscribe to Realtime
   useEffect(() => {
-    const draft = loadDraft();
-    if (draft) {
-      setDate(draft.date);
-      setLabel(draft.label);
-      setGames(draft.games.length > 0 ? draft.games : [emptyGame()]);
-    } else {
-      const today = new Date().toISOString().split("T")[0];
-      setDate(today);
-      setLabel(formatLabel(new Date()));
-    }
-    setHydrated(true);
+    if (typeof window === "undefined") return;
+    clientIdRef.current =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const supabase = createClient();
+    supabaseRef.current = supabase;
+
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase
+        .from("session_drafts")
+        .select("*")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (cancelled) return;
+
+      const dbGames = normalizeGames(data?.games);
+      const dbHasContent =
+        !!(data?.played_at || data?.label || dbGames.some((g) => g.place || g.kills || g.map));
+
+      if (dbHasContent && data) {
+        skipNextPersistRef.current = true;
+        setDate(data.played_at || todayISO());
+        setLabel(
+          data.label && data.label.length > 0
+            ? data.label
+            : formatLabel(new Date())
+        );
+        setGames(dbGames.length > 0 ? dbGames : [emptyGame()]);
+      } else {
+        // Nothing in shared draft — check legacy sessionStorage draft on this device
+        const legacy = loadLegacyDraft();
+        if (legacy) {
+          setDate(legacy.date || todayISO());
+          setLabel(legacy.label || formatLabel(new Date()));
+          setGames(legacy.games.length > 0 ? legacy.games : [emptyGame()]);
+          clearLegacyDraft();
+          // Do NOT set skip flag — we want this to upload to the shared draft
+        } else {
+          setDate(todayISO());
+          setLabel(formatLabel(new Date()));
+        }
+      }
+      setHydrated(true);
+    })();
+
+    const channel: RealtimeChannel = supabase
+      .channel("session_drafts_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "session_drafts",
+          filter: "id=eq.1",
+        },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as Record<string, unknown> | null;
+          if (!row) return;
+          if (row.updated_by === clientIdRef.current) return; // ignore our own echo
+
+          skipNextPersistRef.current = true;
+          const incomingDate = typeof row.played_at === "string" ? row.played_at : "";
+          const incomingLabel = typeof row.label === "string" ? row.label : "";
+          const incomingGames = normalizeGames(row.games);
+          setDate(incomingDate || todayISO());
+          setLabel(
+            incomingLabel.length > 0 ? incomingLabel : formatLabel(new Date())
+          );
+          setGames(incomingGames.length > 0 ? incomingGames : [emptyGame()]);
+        }
+      )
+      .subscribe((status) => {
+        setLive(status === "SUBSCRIBED");
+      });
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  // Persist to sessionStorage on every change
-  const persist = useCallback((d: string, l: string, g: GameDraft[]) => {
-    saveDraft({ date: d, label: l, games: g });
-  }, []);
-
+  // Debounced persist to Supabase
   useEffect(() => {
-    if (hydrated) {
-      persist(date, label, games);
+    if (!hydrated) return;
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
     }
-  }, [date, label, games, hydrated, persist]);
+    const supabase = supabaseRef.current;
+    if (!supabase) return;
+
+    const timeout = setTimeout(() => {
+      void supabase.from("session_drafts").upsert({
+        id: 1,
+        played_at: date || null,
+        label,
+        games,
+        updated_by: clientIdRef.current,
+      });
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [date, label, games, hydrated]);
 
   function handleDateChange(value: string) {
     setDate(value);
@@ -180,7 +270,14 @@ export default function LogSessionPage() {
         label: label.trim(),
         games: parsedGames,
       });
-      clearDraft();
+      // Reset the shared draft for every device
+      await supabase.from("session_drafts").upsert({
+        id: 1,
+        played_at: null,
+        label: null,
+        games: [],
+        updated_by: clientIdRef.current,
+      });
       router.push("/sessions");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save session.");
@@ -193,9 +290,22 @@ export default function LogSessionPage() {
 
   return (
     <div className="space-y-5 pt-6 pb-4">
-      <h1 className="text-3xl font-bold tracking-tight text-foreground">
-        Log Session
-      </h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">
+          Log Session
+        </h1>
+        <div
+          className="flex items-center gap-1.5 text-xs text-muted"
+          aria-live="polite"
+        >
+          <span
+            className={`h-2 w-2 rounded-full ${
+              live ? "bg-green-bright" : "bg-muted"
+            }`}
+          />
+          {live ? "Live" : "Offline"}
+        </div>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Date + Label */}
