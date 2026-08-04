@@ -87,7 +87,11 @@ export async function createSession(
   }));
 
   const { error: gamesError } = await supabase.from("games").insert(gameRows);
-  if (gamesError) throw gamesError;
+  if (gamesError) {
+    // Don't leave an empty session behind; it would skew every session stat
+    await supabase.from("sessions").delete().eq("id", sessionId);
+    throw gamesError;
+  }
 
   return sessionId;
 }

@@ -36,6 +36,25 @@ export interface MapStat {
   avgPlace: number;
 }
 
+export interface SplitSide {
+  games: number;
+  avgKills: number;
+  avgPlace: number;
+  winRate: number;
+}
+
+export interface HalfSplit {
+  front: SplitSide;
+  back: SplitSide;
+  sessionsUsed: number;
+}
+
+export interface LengthSplit {
+  median: number;
+  long: SplitSide & { sessions: number };
+  short: SplitSide & { sessions: number };
+}
+
 export interface SessionData {
   label: string;
   totalKills: number;
@@ -97,4 +116,6 @@ export interface StatsResult {
   placeCounts: Record<number, number>;
   mapStats: MapStat[];
   taggedMapGames: number;
+  halfSplit: HalfSplit | null;
+  lengthSplit: LengthSplit | null;
 }

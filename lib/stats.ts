@@ -1,4 +1,24 @@
-import { Session, StatsResult, StreakDetail, MapStat } from "./types";
+import {
+  Session,
+  StatsResult,
+  StreakDetail,
+  MapStat,
+  Game,
+  SplitSide,
+  HalfSplit,
+  LengthSplit,
+} from "./types";
+
+function summarize(games: Game[]): SplitSide {
+  const n = games.length;
+  if (n === 0) return { games: 0, avgKills: 0, avgPlace: 0, winRate: 0 };
+  return {
+    games: n,
+    avgKills: games.reduce((a, g) => a + g.kills, 0) / n,
+    avgPlace: games.reduce((a, g) => a + g.place, 0) / n,
+    winRate: (games.filter((g) => g.place === 1).length / n) * 100,
+  };
+}
 
 export function getOrdinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
@@ -187,6 +207,55 @@ export function computeStats(sessions: Session[]): StatsResult {
     })
     .sort((a, b) => b.games - a.games);
 
+  // Front half vs back half of a session (do we warm up, or fade?)
+  // Sessions with fewer than 4 games are skipped; on odd counts the middle
+  // game is dropped so both halves stay the same size.
+  const frontGames: Game[] = [];
+  const backGames: Game[] = [];
+  let halfSessionsUsed = 0;
+  sessions.forEach((s) => {
+    const n = s.games.length;
+    if (n < 4) return;
+    halfSessionsUsed++;
+    const half = Math.floor(n / 2);
+    s.games.forEach((g, i) => {
+      if (i < half) frontGames.push(g);
+      else if (i >= n - half) backGames.push(g);
+    });
+  });
+  const halfSplit: HalfSplit | null =
+    halfSessionsUsed >= 3
+      ? {
+          front: summarize(frontGames),
+          back: summarize(backGames),
+          sessionsUsed: halfSessionsUsed,
+        }
+      : null;
+
+  // Long vs short sessions (does grinding longer help or hurt?)
+  // Split at the median session length; exactly-median sessions are excluded
+  // so the two groups stay cleanly separated.
+  let lengthSplit: LengthSplit | null = null;
+  if (totalSessions >= 4) {
+    const sizes = sessions.map((s) => s.games.length).sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)];
+    const longSessions = sessions.filter((s) => s.games.length > median);
+    const shortSessions = sessions.filter((s) => s.games.length < median);
+    if (longSessions.length >= 2 && shortSessions.length >= 2) {
+      lengthSplit = {
+        median,
+        long: {
+          ...summarize(longSessions.flatMap((s) => s.games)),
+          sessions: longSessions.length,
+        },
+        short: {
+          ...summarize(shortSessions.flatMap((s) => s.games)),
+          sessions: shortSessions.length,
+        },
+      };
+    }
+  }
+
   // Per-session data for charts
   const sessionData = sessions.map((s) => ({
     label: s.label,
@@ -216,5 +285,6 @@ export function computeStats(sessions: Session[]): StatsResult {
     winsOver15, wins10to14, wins5to9, winsUnder5,
     sessionData, placeCounts,
     mapStats, taggedMapGames,
+    halfSplit, lengthSplit,
   };
 }

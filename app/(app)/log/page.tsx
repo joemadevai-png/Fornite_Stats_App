@@ -304,6 +304,9 @@ export default function LogSessionPage() {
         games: [],
         updated_by: clientIdRef.current,
       });
+      // Drop the client router cache so Dashboard / Fun Facts / Sessions all
+      // recompute with the session that was just saved
+      router.refresh();
       router.push("/sessions");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save session.");

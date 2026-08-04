@@ -49,7 +49,17 @@ export default function FunFactsContent({ stats, sessions }: FunFactsContentProp
     avgKillsPerSession,
     avgGamesPerSession,
     top5Rate,
+    mapStats,
+    taggedMapGames,
+    halfSplit,
+    lengthSplit,
   } = stats;
+
+  // Maps with enough games to say anything meaningful
+  const rankableMaps = mapStats.filter((m) => m.games >= 5);
+  const byWinRate = [...rankableMaps].sort((a, b) => b.winRate - a.winRate);
+  const byAvgPlace = [...rankableMaps].sort((a, b) => a.avgPlace - b.avgPlace);
+  const byAvgKills = [...rankableMaps].sort((a, b) => b.avgKills - a.avgKills);
 
   const startWith2ndPercent = totalSessions > 0
     ? ((startWith2nd / totalSessions) * 100).toFixed(1)
@@ -209,6 +219,81 @@ export default function FunFactsContent({ stats, sessions }: FunFactsContentProp
     emoji: "\uD83C\uDFC5",
     text: `Top 5 rate is ${top5Rate.toFixed(1)}%. That means in roughly ${Math.round(top5Rate / 10)} out of every 10 games, you're in the final fight.`,
   });
+
+  // 18 - Best vs worst map by win rate
+  if (byWinRate.length >= 2) {
+    const best = byWinRate[0];
+    const worst = byWinRate[byWinRate.length - 1];
+    const gap = (best.winRate - worst.winRate).toFixed(1);
+    facts.push({
+      emoji: "\uD83D\uDDFA\uFE0F",
+      text:
+        best.winRate === worst.winRate
+          ? `Across ${rankableMaps.length} maps with enough games to judge, your win rate is dead even at ${best.winRate.toFixed(1)}%. No map bias showing up yet.`
+          : `${best.map} is your best map: ${best.winRate.toFixed(1)}% win rate over ${best.games} games. ${worst.map} is your worst at ${worst.winRate.toFixed(1)}% over ${worst.games}. That's a ${gap} point gap, so the map you drop into genuinely matters.`,
+    });
+  } else if (taggedMapGames > 0) {
+    facts.push({
+      emoji: "\uD83D\uDDFA\uFE0F",
+      text: `Only ${taggedMapGames} games have a map tagged so far. Tag at least 5 games on two different maps and this turns into a real head-to-head comparison.`,
+    });
+  }
+
+  // 19 - Map placement and kills split
+  if (byAvgPlace.length >= 2) {
+    const bestPlace = byAvgPlace[0];
+    const worstPlace = byAvgPlace[byAvgPlace.length - 1];
+    const bestKills = byAvgKills[0];
+    const sameMap = bestPlace.map === bestKills.map;
+    facts.push({
+      emoji: "\uD83C\uDFAF",
+      text: sameMap
+        ? `You place highest AND frag hardest on ${bestPlace.map}: ${bestPlace.avgPlace.toFixed(1)} avg placement and ${bestKills.avgKills.toFixed(1)} kills a game. Your worst placement map is ${worstPlace.map} at ${worstPlace.avgPlace.toFixed(1)}. If you had a favorite, the numbers back it up.`
+        : `Your best placement map is ${bestPlace.map} (${bestPlace.avgPlace.toFixed(1)} avg place), but you get the most kills on ${bestKills.map} (${bestKills.avgKills.toFixed(1)} a game). Surviving and fragging are happening on different maps, which usually means one is a hot drop and one is a slow play.`,
+    });
+  }
+
+  // 20 - Front half vs back half of a session
+  if (halfSplit) {
+    const { front, back, sessionsUsed } = halfSplit;
+    const killDelta = back.avgKills - front.avgKills;
+    const placeDelta = back.avgPlace - front.avgPlace; // lower place is better
+    const warmingUp = killDelta > 0.3 && placeDelta < -0.3;
+    const fading = killDelta < -0.3 && placeDelta > 0.3;
+    let verdict: string;
+    if (warmingUp) {
+      verdict = "You're a warm-up player. The second half of your sessions is measurably better, so the first few games are basically practice.";
+    } else if (fading) {
+      verdict = "You fade. The first half of your sessions is your best work, and the back half is where fatigue shows up.";
+    } else {
+      verdict = "Your two halves are basically identical, so fatigue and warm-up aren't moving the needle much either way.";
+    }
+    facts.push({
+      emoji: "\u23F1\uFE0F",
+      text: `Across ${sessionsUsed} sessions long enough to split: first half averages ${front.avgKills.toFixed(1)} kills and ${front.avgPlace.toFixed(1)} placement, second half averages ${back.avgKills.toFixed(1)} kills and ${back.avgPlace.toFixed(1)}. ${verdict}`,
+    });
+  }
+
+  // 21 - Long vs short sessions
+  if (lengthSplit) {
+    const { median, long, short } = lengthSplit;
+    const killDelta = long.avgKills - short.avgKills;
+    const placeDelta = long.avgPlace - short.avgPlace;
+    const longBetter = killDelta > 0.3 && placeDelta < -0.3;
+    const shortBetter = killDelta < -0.3 && placeDelta > 0.3;
+    let verdict: string;
+    if (longBetter) {
+      verdict = "Longer sessions are your better sessions. Sticking around pays off.";
+    } else if (shortBetter) {
+      verdict = "Shorter sessions are your sharper sessions. There's a case for logging off while you're ahead.";
+    } else {
+      verdict = "Session length barely changes your output, so play as long as you're enjoying it.";
+    }
+    facts.push({
+      emoji: "\uD83D\uDCC9",
+      text: `Your median session is ${median} games. Your ${long.sessions} longer sessions average ${long.avgKills.toFixed(1)} kills and ${long.avgPlace.toFixed(1)} placement per game. Your ${short.sessions} shorter ones average ${short.avgKills.toFixed(1)} kills and ${short.avgPlace.toFixed(1)}. ${verdict}`,
+    });
+  }
 
   return (
     <div className="py-6">
