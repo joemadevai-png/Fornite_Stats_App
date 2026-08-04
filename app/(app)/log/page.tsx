@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
@@ -27,13 +28,10 @@ function emptyGame(): GameDraft {
   return { place: "", kills: "", map: null };
 }
 
-function cycleMapValue(cur: MapName | null, available: string[]): MapName | null {
-  if (available.length === 0) return null;
-  if (cur === null) return available[0];
-  const idx = available.indexOf(cur);
-  if (idx === -1) return available[0]; // current map no longer exists
-  const next = idx + 1;
-  return next >= available.length ? null : available[next]; // wrap to empty
+type FieldName = "place" | "kills";
+
+function fieldKey(row: number, field: FieldName): string {
+  return `${row}-${field}`;
 }
 
 function normalizeGames(raw: unknown): GameDraft[] {
@@ -88,11 +86,80 @@ export default function LogSessionPage() {
   const [live, setLive] = useState(false);
   const [availableMaps, setAvailableMaps] = useState<string[]>([]);
 
+  const [focusedField, setFocusedField] = useState<{ row: number; field: FieldName } | null>(null);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
+
   const clientIdRef = useRef<string>("");
   const skipNextPersistRef = useRef(false);
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
   const availableMapsRef = useRef<string[]>([]);
   availableMapsRef.current = availableMaps;
+  const inputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+
+  const blurTimerRef = useRef<number | null>(null);
+
+  const registerInput = useCallback(
+    (row: number, field: FieldName) => (el: HTMLInputElement | null) => {
+      const k = fieldKey(row, field);
+      if (el) inputRefs.current.set(k, el);
+      else inputRefs.current.delete(k);
+    },
+    []
+  );
+
+  // Focus moving between two inputs fires blur before focus, so clearing the
+  // bar is deferred and any incoming focus cancels it.
+  const cancelPendingBlur = useCallback(() => {
+    if (blurTimerRef.current !== null) {
+      window.clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+  }, []);
+
+  const handleFieldFocus = useCallback(
+    (row: number, field: FieldName) => {
+      cancelPendingBlur();
+      setFocusedField({ row, field });
+    },
+    [cancelPendingBlur]
+  );
+
+  const handleFieldBlur = useCallback(() => {
+    cancelPendingBlur();
+    blurTimerRef.current = window.setTimeout(() => setFocusedField(null), 150);
+  }, [cancelPendingBlur]);
+
+  const focusField = useCallback(
+    (row: number, field: FieldName) => {
+      const el = inputRefs.current.get(fieldKey(row, field));
+      if (!el) return;
+      cancelPendingBlur();
+      el.focus();
+      el.select();
+      setFocusedField({ row, field });
+    },
+    [cancelPendingBlur]
+  );
+
+  useEffect(() => () => cancelPendingBlur(), [cancelPendingBlur]);
+
+  // Track the on-screen keyboard so the accessory bar can sit right above it.
+  // iOS shrinks the visual viewport when the keyboard opens; the layout
+  // viewport stays put, so the difference is the keyboard height.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      setKeyboardOffset(Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)));
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
 
   // Hydrate from Supabase (with legacy sessionStorage fallback) and subscribe to Realtime
   useEffect(() => {
@@ -236,21 +303,57 @@ export default function LogSessionPage() {
     );
   }
 
-  function cycleMap(index: number) {
-    const list = availableMapsRef.current;
+  function setMap(index: number, value: string) {
     setGames((prev) =>
-      prev.map((g, i) =>
-        i === index ? { ...g, map: cycleMapValue(g.map, list) } : g
-      )
+      prev.map((g, i) => (i === index ? { ...g, map: value === "" ? null : value } : g))
     );
   }
 
+  // flushSync so the new row exists before we focus it. On iOS a focus() that
+  // lands in a later task loses the user gesture and the keyboard closes.
   function addGame() {
-    setGames((prev) => [...prev, emptyGame()]);
+    let newIndex = 0;
+    flushSync(() => {
+      setGames((prev) => {
+        newIndex = prev.length;
+        return [...prev, emptyGame()];
+      });
+    });
+    focusField(newIndex, "place");
   }
 
   function removeGame(index: number) {
     setGames((prev) => prev.filter((_, i) => i !== index));
+    setFocusedField(null);
+  }
+
+  function focusPrevField() {
+    if (!focusedField) return;
+    const { row, field } = focusedField;
+    if (field === "kills") focusField(row, "place");
+    else if (row > 0) focusField(row - 1, "kills");
+  }
+
+  // place -> kills -> next row's place. Past the last row's kills, start a new
+  // row so a whole session can be entered without leaving the keyboard.
+  function focusNextField() {
+    if (!focusedField) return;
+    const { row, field } = focusedField;
+    if (field === "place") {
+      focusField(row, "kills");
+    } else if (row < games.length - 1) {
+      focusField(row + 1, "place");
+    } else {
+      addGame();
+    }
+  }
+
+  function dismissKeyboard() {
+    const { row, field } = focusedField ?? {};
+    if (row !== undefined && field) {
+      inputRefs.current.get(fieldKey(row, field))?.blur();
+    }
+    setFocusedField(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -390,6 +493,7 @@ export default function LogSessionPage() {
               >
                 <span className="text-sm font-medium text-muted">{index + 1}</span>
                 <input
+                  ref={registerInput(index, "place")}
                   type="number"
                   inputMode="numeric"
                   min={1}
@@ -397,9 +501,12 @@ export default function LogSessionPage() {
                   placeholder="1-100"
                   value={game.place}
                   onChange={(e) => updateGame(index, "place", e.target.value)}
-                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50"
+                  onFocus={() => handleFieldFocus(index, "place")}
+                  onBlur={handleFieldBlur}
+                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
                 <input
+                  ref={registerInput(index, "kills")}
                   type="number"
                   inputMode="numeric"
                   min={0}
@@ -407,24 +514,31 @@ export default function LogSessionPage() {
                   placeholder="0-99"
                   value={game.kills}
                   onChange={(e) => updateGame(index, "kills", e.target.value)}
-                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50"
+                  onFocus={() => handleFieldFocus(index, "kills")}
+                  onBlur={handleFieldBlur}
+                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
-                <button
-                  type="button"
-                  onClick={() => cycleMap(index)}
-                  aria-label={
-                    game.map
-                      ? `Map: ${game.map}. Tap to change.`
-                      : "Tap to pick a map"
-                  }
-                  className={`w-full rounded-md px-2 py-1.5 text-xs font-medium text-center truncate transition-colors border ${
+                <select
+                  value={game.map ?? ""}
+                  onChange={(e) => setMap(index, e.target.value)}
+                  aria-label={`Map for game ${index + 1}`}
+                  className={`w-full rounded-md border px-2 py-1.5 text-xs font-medium transition-colors focus:border-blue focus:outline-none ${
                     game.map
                       ? "bg-background border-blue text-foreground"
                       : "bg-background border-border text-muted/70"
                   }`}
                 >
-                  {game.map ?? "Tap to pick"}
-                </button>
+                  <option value="">Pick map</option>
+                  {/* Keep a previously-chosen map selectable even if it was deleted */}
+                  {game.map && !availableMaps.includes(game.map) && (
+                    <option value={game.map}>{game.map}</option>
+                  )}
+                  {availableMaps.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
                 {games.length > 1 ? (
                   <button
                     type="button"
@@ -463,6 +577,48 @@ export default function LogSessionPage() {
           {saving ? "Saving..." : "Save Session"}
         </button>
       </form>
+
+      {/* Keyboard accessory bar: the iOS numeric keypad has no Next/Return key,
+          so this stands in for Tab. onMouseDown is prevented to keep focus (and
+          the keyboard) from dropping when a button is pressed. */}
+      {focusedField && (
+        <div
+          className="fixed inset-x-0 z-50 flex items-center justify-between gap-2 border-t border-border bg-surface px-3 py-2"
+          style={{ bottom: keyboardOffset }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={focusPrevField}
+              disabled={focusedField.row === 0 && focusedField.field === "place"}
+              aria-label="Previous field"
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground disabled:opacity-40"
+            >
+              &#8249;
+            </button>
+            <button
+              type="button"
+              onClick={focusNextField}
+              aria-label="Next field"
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground"
+            >
+              &#8250;
+            </button>
+          </div>
+          <span className="text-xs text-muted">
+            Game {focusedField.row + 1} &middot;{" "}
+            {focusedField.field === "place" ? "Place" : "Kills"}
+          </span>
+          <button
+            type="button"
+            onClick={dismissKeyboard}
+            className="rounded-lg bg-blue px-4 py-2 text-sm font-semibold text-white"
+          >
+            Done
+          </button>
+        </div>
+      )}
     </div>
   );
 }
