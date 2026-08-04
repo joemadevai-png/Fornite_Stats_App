@@ -27,13 +27,13 @@ function emptyGame(): GameDraft {
   return { place: "", kills: "", map: null };
 }
 
-function nextMap(cur: MapName | null): MapName | null {
-  if (cur === null) return "Venture";
-  if (cur === "Venture") return "Elite Stronghold";
-  if (cur === "Elite Stronghold") return "Slurp Rush";
-  if (cur === "Slurp Rush") return "Adobe";
-  if (cur === "Adobe") return "Simpsons";
-  return null;
+function cycleMapValue(cur: MapName | null, available: string[]): MapName | null {
+  if (available.length === 0) return null;
+  if (cur === null) return available[0];
+  const idx = available.indexOf(cur);
+  if (idx === -1) return available[0]; // current map no longer exists
+  const next = idx + 1;
+  return next >= available.length ? null : available[next]; // wrap to empty
 }
 
 function normalizeGames(raw: unknown): GameDraft[] {
@@ -86,10 +86,13 @@ export default function LogSessionPage() {
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [live, setLive] = useState(false);
+  const [availableMaps, setAvailableMaps] = useState<string[]>([]);
 
   const clientIdRef = useRef<string>("");
   const skipNextPersistRef = useRef(false);
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
+  const availableMapsRef = useRef<string[]>([]);
+  availableMapsRef.current = availableMaps;
 
   // Hydrate from Supabase (with legacy sessionStorage fallback) and subscribe to Realtime
   useEffect(() => {
@@ -104,13 +107,16 @@ export default function LogSessionPage() {
     let cancelled = false;
 
     (async () => {
-      const { data } = await supabase
-        .from("session_drafts")
-        .select("*")
-        .eq("id", 1)
-        .maybeSingle();
+      const [{ data }, { data: mapsData }] = await Promise.all([
+        supabase.from("session_drafts").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("maps").select("name").order("created_at", { ascending: true }),
+      ]);
 
       if (cancelled) return;
+
+      if (mapsData) {
+        setAvailableMaps(mapsData.map((m: { name: string }) => m.name));
+      }
 
       const dbGames = normalizeGames(data?.games);
       const dbHasContent =
@@ -172,9 +178,25 @@ export default function LogSessionPage() {
         setLive(status === "SUBSCRIBED");
       });
 
+    const mapsChannel: RealtimeChannel = supabase
+      .channel("maps_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "maps" },
+        async () => {
+          const { data: fresh } = await supabase
+            .from("maps")
+            .select("name")
+            .order("created_at", { ascending: true });
+          if (fresh) setAvailableMaps(fresh.map((m: { name: string }) => m.name));
+        }
+      )
+      .subscribe();
+
     return () => {
       cancelled = true;
       supabase.removeChannel(channel);
+      supabase.removeChannel(mapsChannel);
     };
   }, []);
 
@@ -215,8 +237,11 @@ export default function LogSessionPage() {
   }
 
   function cycleMap(index: number) {
+    const list = availableMapsRef.current;
     setGames((prev) =>
-      prev.map((g, i) => (i === index ? { ...g, map: nextMap(g.map) } : g))
+      prev.map((g, i) =>
+        i === index ? { ...g, map: cycleMapValue(g.map, list) } : g
+      )
     );
   }
 

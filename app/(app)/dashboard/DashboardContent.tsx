@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import StatCard from "@/components/stats/StatCard";
 import MiniBar from "@/components/stats/MiniBar";
 import { StatsResult } from "@/lib/types";
 import { getOrdinal } from "@/lib/stats";
+import { createClient } from "@/lib/supabase/client";
 
 interface DashboardContentProps {
   stats: StatsResult | null;
@@ -16,22 +18,148 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function NewMapControl() {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Name required.");
+      return;
+    }
+    if (trimmed.length > 40) {
+      setError("Too long (40 max).");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const supabase = createClient();
+      const { error: insertError } = await supabase
+        .from("maps")
+        .insert({ name: trimmed });
+
+      if (insertError) {
+        if (insertError.code === "23505") {
+          setError("Map already exists.");
+        } else {
+          setError(insertError.message || "Could not add.");
+        }
+        return;
+      }
+      setJustAdded(trimmed);
+      setName("");
+      setOpen(false);
+      setTimeout(() => setJustAdded(null), 2500);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-3">
+        {justAdded && (
+          <span className="text-xs text-green">Added &ldquo;{justAdded}&rdquo;</span>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-blue hover:text-blue"
+        >
+          + New Map
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="flex items-center gap-2">
+      <input
+        autoFocus
+        type="text"
+        value={name}
+        onChange={(e) => {
+          setName(e.target.value);
+          if (error) setError(null);
+        }}
+        placeholder="Map name"
+        maxLength={40}
+        disabled={saving}
+        className="w-40 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
+      />
+      <button
+        type="submit"
+        disabled={saving}
+        className="rounded-lg bg-blue px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+      >
+        {saving ? "..." : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(false);
+          setName("");
+          setError(null);
+        }}
+        className="text-xs text-muted hover:text-foreground"
+      >
+        Cancel
+      </button>
+      {error && <span className="text-xs text-red">{error}</span>}
+    </form>
+  );
+}
+
 export default function DashboardContent({
   stats,
   dateRange,
 }: DashboardContentProps) {
+  const header = (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">
+          Fort Stats
+        </h1>
+        {stats && (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">Session Stats</p>
+            <p className="mt-2 text-xs text-muted">
+              {stats.totalSessions} sessions / {stats.totalGames} games /{" "}
+              {dateRange
+                ? `${formatDate(dateRange.first)} - ${formatDate(dateRange.last)}`
+                : ""}
+            </p>
+          </>
+        )}
+      </div>
+      <div className="pt-1">
+        <NewMapControl />
+      </div>
+    </div>
+  );
+
   if (!stats) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
-        <p className="text-lg text-muted-foreground">
-          No sessions yet. Log your first session!
-        </p>
-        <Link
-          href="/log"
-          className="rounded-lg bg-blue px-5 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
-        >
-          Log Session
-        </Link>
+      <div className="space-y-8 pt-6 pb-4">
+        {header}
+        <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 text-center">
+          <p className="text-lg text-muted-foreground">
+            No sessions yet. Log your first session!
+          </p>
+          <Link
+            href="/log"
+            className="rounded-lg bg-blue px-5 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+          >
+            Log Session
+          </Link>
+        </div>
       </div>
     );
   }
@@ -40,7 +168,6 @@ export default function DashboardContent({
     totalGames,
     totalKills,
     totalWins,
-    totalSessions,
     avgKillsPerGame,
     avgKillsPerSession,
     avgWinsPerSession,
@@ -88,23 +215,9 @@ export default function DashboardContent({
   const maxAvgKills = Math.max(...avgKillsData, 1);
   const maxWinRate = Math.max(...winRateData, 1);
 
-  const rangeLabel =
-    dateRange
-      ? `${formatDate(dateRange.first)} - ${formatDate(dateRange.last)}`
-      : "";
-
   return (
     <div className="space-y-8 pt-6 pb-4">
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">
-          Fort Stats
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Session Stats</p>
-        <p className="mt-2 text-xs text-muted">
-          {totalSessions} sessions / {totalGames} games / {rangeLabel}
-        </p>
-      </div>
+      {header}
 
       {/* Core Stats Grid */}
       <div className="grid grid-cols-2 gap-3">

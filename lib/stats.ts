@@ -1,4 +1,4 @@
-import { Session, StatsResult, StreakDetail, MapStat, MAP_NAMES } from "./types";
+import { Session, StatsResult, StreakDetail, MapStat } from "./types";
 
 export function getOrdinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
@@ -159,28 +159,33 @@ export function computeStats(sessions: Session[]): StatsResult {
   const wins5to9 = wins.filter((g) => g.kills >= 5 && g.kills < 10).length;
   const winsUnder5 = wins.filter((g) => g.kills < 5).length;
 
-  // Per-map breakdown — only counts games that have a map tagged
-  const taggedMapGames = allGames.filter((g) => g.map != null).length;
-  const mapStats: MapStat[] = MAP_NAMES
-    .map((m) => {
-      const mGames = allGames.filter((g) => g.map === m);
+  // Per-map breakdown — derived from whatever map values actually appear in games
+  const taggedMapGames = allGames.filter((g) => g.map != null && g.map !== "").length;
+  const mapGroups = new Map<string, typeof allGames>();
+  allGames.forEach((g) => {
+    if (!g.map) return;
+    const arr = mapGroups.get(g.map) || [];
+    arr.push(g);
+    mapGroups.set(g.map, arr);
+  });
+  const mapStats: MapStat[] = Array.from(mapGroups.entries())
+    .map(([name, mGames]) => {
       const gCount = mGames.length;
-      if (gCount === 0) return null;
       const mWins = mGames.filter((g) => g.place === 1).length;
       const mTop5 = mGames.filter((g) => g.place <= 5).length;
       const mKills = mGames.reduce((a, g) => a + g.kills, 0);
       const mPlace = mGames.reduce((a, g) => a + g.place, 0);
       return {
-        map: m,
+        map: name,
         games: gCount,
         wins: mWins,
         winRate: (mWins / gCount) * 100,
         top5Rate: (mTop5 / gCount) * 100,
         avgKills: mKills / gCount,
         avgPlace: mPlace / gCount,
-      } as MapStat;
+      };
     })
-    .filter((s): s is MapStat => s !== null);
+    .sort((a, b) => b.games - a.games);
 
   // Per-session data for charts
   const sessionData = sessions.map((s) => ({

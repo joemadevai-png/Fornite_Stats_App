@@ -1,5 +1,12 @@
-export const MAP_NAMES = ["Venture", "Elite Stronghold", "Slurp Rush", "Adobe", "Simpsons"] as const;
-export type MapName = (typeof MAP_NAMES)[number];
+// Map names live in the `maps` table (see migration 006). They're user-editable,
+// so the type is intentionally an open string.
+export type MapName = string;
+
+export interface MapRecord {
+  id: string;
+  name: string;
+  created_at: string;
+}
 
 export interface Game {
   id?: string;
