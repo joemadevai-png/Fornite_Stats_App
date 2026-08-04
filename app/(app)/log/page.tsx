@@ -28,7 +28,15 @@ function emptyGame(): GameDraft {
   return { place: "", kills: "", map: null };
 }
 
-type FieldName = "place" | "kills";
+type FieldName = "place" | "kills" | "map";
+
+const FIELD_ORDER: FieldName[] = ["place", "kills", "map"];
+
+const FIELD_LABEL: Record<FieldName, string> = {
+  place: "Place",
+  kills: "Kills",
+  map: "Map",
+};
 
 function fieldKey(row: number, field: FieldName): string {
   return `${row}-${field}`;
@@ -93,16 +101,17 @@ export default function LogSessionPage() {
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
   const availableMapsRef = useRef<string[]>([]);
   availableMapsRef.current = availableMaps;
-  const inputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const fieldRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement>>(new Map());
 
   const blurTimerRef = useRef<number | null>(null);
 
-  const registerInput = useCallback(
-    (row: number, field: FieldName) => (el: HTMLInputElement | null) => {
-      const k = fieldKey(row, field);
-      if (el) inputRefs.current.set(k, el);
-      else inputRefs.current.delete(k);
-    },
+  const registerField = useCallback(
+    (row: number, field: FieldName) =>
+      (el: HTMLInputElement | HTMLSelectElement | null) => {
+        const k = fieldKey(row, field);
+        if (el) fieldRefs.current.set(k, el);
+        else fieldRefs.current.delete(k);
+      },
     []
   );
 
@@ -130,11 +139,23 @@ export default function LogSessionPage() {
 
   const focusField = useCallback(
     (row: number, field: FieldName) => {
-      const el = inputRefs.current.get(fieldKey(row, field));
+      const el = fieldRefs.current.get(fieldKey(row, field));
       if (!el) return;
       cancelPendingBlur();
       el.focus();
-      el.select();
+      if (el instanceof HTMLInputElement) {
+        el.select();
+      } else {
+        // Focusing a <select> highlights it but doesn't open the iOS picker.
+        // showPicker() does, and the stepper tap supplies the user activation
+        // it requires. Not in every browser, and it throws when it can't run,
+        // so a failure just leaves the select focused for a manual tap.
+        try {
+          (el as HTMLSelectElement & { showPicker?: () => void }).showPicker?.();
+        } catch {
+          // fall back to plain focus
+        }
+      }
       setFocusedField({ row, field });
     },
     [cancelPendingBlur]
@@ -310,9 +331,13 @@ export default function LogSessionPage() {
 
   // Nothing focused yet: jump to the first field that still needs a value.
   function focusFirstEmpty() {
-    const idx = games.findIndex((g) => !g.place || !g.kills);
-    const row = idx === -1 ? 0 : idx;
-    focusField(row, games[row] && !games[row].place ? "place" : "kills");
+    const row = games.findIndex((g) => !g.place || !g.kills || !g.map);
+    if (row === -1) {
+      focusField(0, "place");
+      return;
+    }
+    const g = games[row];
+    focusField(row, !g.place ? "place" : !g.kills ? "kills" : "map");
   }
 
   function focusPrevField() {
@@ -321,22 +346,27 @@ export default function LogSessionPage() {
       return;
     }
     const { row, field } = focusedField;
-    if (field === "kills") focusField(row, "place");
-    else if (row > 0) focusField(row - 1, "kills");
+    const i = FIELD_ORDER.indexOf(field);
+    if (i > 0) {
+      focusField(row, FIELD_ORDER[i - 1]);
+    } else if (row > 0) {
+      focusField(row - 1, FIELD_ORDER[FIELD_ORDER.length - 1]);
+    }
   }
 
-  // place -> kills -> next row's place. Past the last row's kills, start a new
-  // row so a whole session can be entered without leaving the keyboard.
+  // place -> kills -> map -> next row's place. Past the last row's map, start a
+  // new row so a whole session can be entered from the stepper alone.
   function focusNextField() {
     if (!focusedField) {
       focusFirstEmpty();
       return;
     }
     const { row, field } = focusedField;
-    if (field === "place") {
-      focusField(row, "kills");
+    const i = FIELD_ORDER.indexOf(field);
+    if (i < FIELD_ORDER.length - 1) {
+      focusField(row, FIELD_ORDER[i + 1]);
     } else if (row < games.length - 1) {
-      focusField(row + 1, "place");
+      focusField(row + 1, FIELD_ORDER[0]);
     } else {
       addGame();
     }
@@ -345,7 +375,7 @@ export default function LogSessionPage() {
   function dismissKeyboard() {
     const { row, field } = focusedField ?? {};
     if (row !== undefined && field) {
-      inputRefs.current.get(fieldKey(row, field))?.blur();
+      fieldRefs.current.get(fieldKey(row, field))?.blur();
     }
     setFocusedField(null);
   }
@@ -490,7 +520,7 @@ export default function LogSessionPage() {
               >
                 <span className="text-sm font-medium text-muted">{index + 1}</span>
                 <input
-                  ref={registerInput(index, "place")}
+                  ref={registerField(index, "place")}
                   type="number"
                   inputMode="numeric"
                   min={1}
@@ -503,7 +533,7 @@ export default function LogSessionPage() {
                   className="block w-full min-w-0 bg-background border border-border rounded-md px-2 py-2.5 text-base text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
                 <input
-                  ref={registerInput(index, "kills")}
+                  ref={registerField(index, "kills")}
                   type="number"
                   inputMode="numeric"
                   min={0}
@@ -516,8 +546,11 @@ export default function LogSessionPage() {
                   className="block w-full min-w-0 bg-background border border-border rounded-md px-2 py-2.5 text-base text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
                 <select
+                  ref={registerField(index, "map")}
                   value={game.map ?? ""}
                   onChange={(e) => setMap(index, e.target.value)}
+                  onFocus={() => handleFieldFocus(index, "map")}
+                  onBlur={handleFieldBlur}
                   aria-label={`Map for game ${index + 1}`}
                   className={`block w-full min-w-0 rounded-md border px-2 py-2.5 text-base font-medium transition-colors focus:border-blue focus:outline-none ${
                     game.map
@@ -591,9 +624,7 @@ export default function LogSessionPage() {
           </button>
           <span className="flex-1 truncate text-center text-xs font-medium text-foreground">
             {focusedField
-              ? `Game ${focusedField.row + 1} · ${
-                  focusedField.field === "place" ? "Place" : "Kills"
-                }`
+              ? `Game ${focusedField.row + 1} · ${FIELD_LABEL[focusedField.field]}`
               : "Tap › to start"}
           </span>
           <button
