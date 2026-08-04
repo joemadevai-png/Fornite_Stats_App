@@ -32,6 +32,7 @@ function nextMap(cur: MapName | null): MapName | null {
   if (cur === "Venture") return "Elite Stronghold";
   if (cur === "Elite Stronghold") return "Slurp Rush";
   if (cur === "Slurp Rush") return "Adobe";
+  if (cur === "Adobe") return "Simpsons";
   return null;
 }
 
