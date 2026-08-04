@@ -87,7 +87,6 @@ export default function LogSessionPage() {
   const [availableMaps, setAvailableMaps] = useState<string[]>([]);
 
   const [focusedField, setFocusedField] = useState<{ row: number; field: FieldName } | null>(null);
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
 
   const clientIdRef = useRef<string>("");
   const skipNextPersistRef = useRef(false);
@@ -142,24 +141,6 @@ export default function LogSessionPage() {
   );
 
   useEffect(() => () => cancelPendingBlur(), [cancelPendingBlur]);
-
-  // Track the on-screen keyboard so the accessory bar can sit right above it.
-  // iOS shrinks the visual viewport when the keyboard opens; the layout
-  // viewport stays put, so the difference is the keyboard height.
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => {
-      setKeyboardOffset(Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)));
-    };
-    update();
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
-    return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
-    };
-  }, []);
 
   // Hydrate from Supabase (with legacy sessionStorage fallback) and subscribe to Realtime
   useEffect(() => {
@@ -327,8 +308,18 @@ export default function LogSessionPage() {
     setFocusedField(null);
   }
 
+  // Nothing focused yet: jump to the first field that still needs a value.
+  function focusFirstEmpty() {
+    const idx = games.findIndex((g) => !g.place || !g.kills);
+    const row = idx === -1 ? 0 : idx;
+    focusField(row, games[row] && !games[row].place ? "place" : "kills");
+  }
+
   function focusPrevField() {
-    if (!focusedField) return;
+    if (!focusedField) {
+      focusFirstEmpty();
+      return;
+    }
     const { row, field } = focusedField;
     if (field === "kills") focusField(row, "place");
     else if (row > 0) focusField(row - 1, "kills");
@@ -337,7 +328,10 @@ export default function LogSessionPage() {
   // place -> kills -> next row's place. Past the last row's kills, start a new
   // row so a whole session can be entered without leaving the keyboard.
   function focusNextField() {
-    if (!focusedField) return;
+    if (!focusedField) {
+      focusFirstEmpty();
+      return;
+    }
     const { row, field } = focusedField;
     if (field === "place") {
       focusField(row, "kills");
@@ -440,26 +434,29 @@ export default function LogSessionPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Date + Label */}
+        {/* Date + Label.
+            min-w-0 matters: grid children default to min-width:auto, and the
+            iOS date input's intrinsic width is wide enough to overflow its
+            cell and sit under the Label field. */}
         <div className="grid grid-cols-2 gap-3">
-          <div>
+          <div className="min-w-0">
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">Date</label>
             <input
               type="date"
               value={date}
               onChange={(e) => handleDateChange(e.target.value)}
               required
-              className="w-full bg-surface border border-border rounded-lg px-3 py-2.5 text-sm text-foreground"
+              className="block w-full min-w-0 appearance-none bg-surface border border-border rounded-lg px-3 py-3 text-base text-foreground"
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">Label</label>
             <input
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               required
-              className="w-full bg-surface border border-border rounded-lg px-3 py-2.5 text-sm text-foreground"
+              className="block w-full min-w-0 bg-surface border border-border rounded-lg px-3 py-3 text-base text-foreground"
             />
           </div>
         </div>
@@ -475,7 +472,7 @@ export default function LogSessionPage() {
 
           <div className="rounded-xl border border-border bg-surface overflow-hidden">
             {/* Header */}
-            <div className="grid grid-cols-[28px_1fr_1fr_1.4fr_28px] gap-2 px-3 py-2 border-b border-border">
+            <div className="grid grid-cols-[22px_1fr_1fr_1.5fr_26px] gap-1.5 px-2.5 py-2 border-b border-border">
               <span className="text-xs font-medium text-muted">#</span>
               <span className="text-xs font-medium text-muted">Place</span>
               <span className="text-xs font-medium text-muted">Kills</span>
@@ -487,7 +484,7 @@ export default function LogSessionPage() {
             {games.map((game, index) => (
               <div
                 key={index}
-                className={`grid grid-cols-[28px_1fr_1fr_1.4fr_28px] gap-2 items-center px-3 py-1.5 ${
+                className={`grid grid-cols-[22px_1fr_1fr_1.5fr_26px] gap-1.5 items-center px-2.5 py-2 ${
                   index < games.length - 1 ? "border-b border-border/50" : ""
                 }`}
               >
@@ -503,7 +500,7 @@ export default function LogSessionPage() {
                   onChange={(e) => updateGame(index, "place", e.target.value)}
                   onFocus={() => handleFieldFocus(index, "place")}
                   onBlur={handleFieldBlur}
-                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
+                  className="block w-full min-w-0 bg-background border border-border rounded-md px-2 py-2.5 text-base text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
                 <input
                   ref={registerInput(index, "kills")}
@@ -516,13 +513,13 @@ export default function LogSessionPage() {
                   onChange={(e) => updateGame(index, "kills", e.target.value)}
                   onFocus={() => handleFieldFocus(index, "kills")}
                   onBlur={handleFieldBlur}
-                  className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
+                  className="block w-full min-w-0 bg-background border border-border rounded-md px-2 py-2.5 text-base text-foreground placeholder:text-muted/50 focus:border-blue focus:outline-none"
                 />
                 <select
                   value={game.map ?? ""}
                   onChange={(e) => setMap(index, e.target.value)}
                   aria-label={`Map for game ${index + 1}`}
-                  className={`w-full rounded-md border px-2 py-1.5 text-xs font-medium transition-colors focus:border-blue focus:outline-none ${
+                  className={`block w-full min-w-0 rounded-md border px-2 py-2.5 text-base font-medium transition-colors focus:border-blue focus:outline-none ${
                     game.map
                       ? "bg-background border-blue text-foreground"
                       : "bg-background border-border text-muted/70"
@@ -557,9 +554,55 @@ export default function LogSessionPage() {
           <button
             type="button"
             onClick={addGame}
-            className="mt-2 w-full rounded-lg border border-dashed border-border py-2 text-sm font-medium text-muted hover:border-blue hover:text-blue transition-colors"
+            className="mt-2 w-full rounded-lg border border-dashed border-border py-3 text-sm font-medium text-muted hover:border-blue hover:text-blue transition-colors"
           >
             + Add Game
+          </button>
+        </div>
+
+        {/* Field stepper. The iOS numeric keypad has no Next key, so this is
+            the stand-in for Tab. It sits in normal flow rather than pinned
+            above the keyboard, because Safari's autofill toolbar (passwords /
+            cards / addresses) covers anything docked there. onMouseDown is
+            prevented so pressing a button doesn't blur the input and close the
+            keyboard. */}
+        <div
+          className="flex items-center gap-2 rounded-xl border border-blue/50 bg-blue/10 p-2"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={focusPrevField}
+            disabled={
+              !!focusedField && focusedField.row === 0 && focusedField.field === "place"
+            }
+            aria-label="Previous field"
+            className="min-h-[44px] min-w-[52px] rounded-lg border border-blue/50 bg-background text-lg font-semibold text-blue transition-opacity disabled:opacity-30"
+          >
+            &#8249;
+          </button>
+          <button
+            type="button"
+            onClick={focusNextField}
+            aria-label="Next field"
+            className="min-h-[44px] min-w-[52px] rounded-lg bg-blue text-lg font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            &#8250;
+          </button>
+          <span className="flex-1 truncate text-center text-xs font-medium text-foreground">
+            {focusedField
+              ? `Game ${focusedField.row + 1} · ${
+                  focusedField.field === "place" ? "Place" : "Kills"
+                }`
+              : "Tap › to start"}
+          </span>
+          <button
+            type="button"
+            onClick={dismissKeyboard}
+            disabled={!focusedField}
+            className="min-h-[44px] rounded-lg border border-blue/50 bg-background px-3 text-sm font-semibold text-blue transition-opacity disabled:opacity-30"
+          >
+            Done
           </button>
         </div>
 
@@ -572,53 +615,11 @@ export default function LogSessionPage() {
         <button
           type="submit"
           disabled={saving}
-          className="w-full bg-blue text-white rounded-lg py-3 font-semibold transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="w-full bg-blue text-white rounded-lg py-4 font-semibold transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save Session"}
         </button>
       </form>
-
-      {/* Keyboard accessory bar: the iOS numeric keypad has no Next/Return key,
-          so this stands in for Tab. onMouseDown is prevented to keep focus (and
-          the keyboard) from dropping when a button is pressed. */}
-      {focusedField && (
-        <div
-          className="fixed inset-x-0 z-50 flex items-center justify-between gap-2 border-t border-border bg-surface px-3 py-2"
-          style={{ bottom: keyboardOffset }}
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={focusPrevField}
-              disabled={focusedField.row === 0 && focusedField.field === "place"}
-              aria-label="Previous field"
-              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground disabled:opacity-40"
-            >
-              &#8249;
-            </button>
-            <button
-              type="button"
-              onClick={focusNextField}
-              aria-label="Next field"
-              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground"
-            >
-              &#8250;
-            </button>
-          </div>
-          <span className="text-xs text-muted">
-            Game {focusedField.row + 1} &middot;{" "}
-            {focusedField.field === "place" ? "Place" : "Kills"}
-          </span>
-          <button
-            type="button"
-            onClick={dismissKeyboard}
-            className="rounded-lg bg-blue px-4 py-2 text-sm font-semibold text-white"
-          >
-            Done
-          </button>
-        </div>
-      )}
     </div>
   );
 }
