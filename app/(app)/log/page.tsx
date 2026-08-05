@@ -7,26 +7,10 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { createSession } from "@/lib/queries";
 import { MapName } from "@/lib/types";
-
-const LEGACY_DRAFT_KEY = "fort-stats-draft";
-
-function formatLabel(date: Date): string {
-  return `${date.getMonth() + 1}/${date.getDate()}`;
-}
-
-function todayISO(): string {
-  return new Date().toISOString().split("T")[0];
-}
-
-interface GameDraft {
-  place: string;
-  kills: string;
-  map: MapName | null;
-}
-
-function emptyGame(): GameDraft {
-  return { place: "", kills: "", map: null };
-}
+import { useSharedDraft, FocusTarget } from "@/lib/draft/useSharedDraft";
+import { emptyGame } from "@/lib/draft/types";
+import { clearMirror } from "@/lib/draft/storage";
+import SyncIndicator from "./SyncIndicator";
 
 type FieldName = "place" | "kills" | "map";
 
@@ -42,67 +26,39 @@ function fieldKey(row: number, field: FieldName): string {
   return `${row}-${field}`;
 }
 
-function normalizeGames(raw: unknown): GameDraft[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((g): g is Record<string, unknown> => typeof g === "object" && g !== null)
-    .map((g) => ({
-      place: typeof g.place === "string" ? g.place : "",
-      kills: typeof g.kills === "string" ? g.kills : "",
-      map: (g.map as MapName | null | undefined) ?? null,
-    }));
-}
-
-function loadLegacyDraft(): { date: string; label: string; games: GameDraft[] } | null {
-  try {
-    const raw = sessionStorage.getItem(LEGACY_DRAFT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    const games = normalizeGames(parsed?.games);
-    const nonEmpty =
-      (parsed?.date && parsed.date.length > 0) ||
-      (parsed?.label && parsed.label.length > 0) ||
-      games.some((g) => g.place || g.kills || g.map);
-    if (!nonEmpty) return null;
-    return {
-      date: typeof parsed?.date === "string" ? parsed.date : "",
-      label: typeof parsed?.label === "string" ? parsed.label : "",
-      games,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function clearLegacyDraft() {
-  try {
-    sessionStorage.removeItem(LEGACY_DRAFT_KEY);
-  } catch {
-    // ignore
-  }
+function formatLabel(date: Date): string {
+  return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
 export default function LogSessionPage() {
   const router = useRouter();
 
-  const [date, setDate] = useState("");
-  const [label, setLabel] = useState("");
-  const [games, setGames] = useState<GameDraft[]>([emptyGame()]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
-  const [live, setLive] = useState(false);
-  const [availableMaps, setAvailableMaps] = useState<string[]>([]);
-
   const [focusedField, setFocusedField] = useState<{ row: number; field: FieldName } | null>(null);
+  const [headerFocus, setHeaderFocus] = useState<"date" | "label" | null>(null);
+  const [availableMaps, setAvailableMaps] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [clearArmed, setClearArmed] = useState(false);
 
-  const clientIdRef = useRef<string>("");
-  const skipNextPersistRef = useRef(false);
-  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
-  const availableMapsRef = useRef<string[]>([]);
-  availableMapsRef.current = availableMaps;
+  const focusedFieldRef = useRef(focusedField);
+  focusedFieldRef.current = focusedField;
+  const headerFocusRef = useRef(headerFocus);
+  headerFocusRef.current = headerFocus;
+
+  // Read through refs: the hook holds this callback for its whole lifetime.
+  const getFocusTarget = useCallback((): FocusTarget => {
+    if (headerFocusRef.current === "date") return { kind: "date" };
+    if (headerFocusRef.current === "label") return { kind: "label" };
+    const f = focusedFieldRef.current;
+    return f ? { kind: "cell", row: f.row, field: f.field } : null;
+  }, []);
+
+  const { doc, ready, edit, clear, status, recovery, presenceCount, retry } =
+    useSharedDraft({ getFocusTarget });
+
+  const { date, label, games } = doc;
+
   const fieldRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement>>(new Map());
-
   const blurTimerRef = useRef<number | null>(null);
 
   const registerField = useCallback(
@@ -116,7 +72,7 @@ export default function LogSessionPage() {
   );
 
   // Focus moving between two inputs fires blur before focus, so clearing the
-  // bar is deferred and any incoming focus cancels it.
+  // stepper label is deferred and any incoming focus cancels it.
   const cancelPendingBlur = useCallback(() => {
     if (blurTimerRef.current !== null) {
       window.clearTimeout(blurTimerRef.current);
@@ -127,6 +83,7 @@ export default function LogSessionPage() {
   const handleFieldFocus = useCallback(
     (row: number, field: FieldName) => {
       cancelPendingBlur();
+      setHeaderFocus(null);
       setFocusedField({ row, field });
     },
     [cancelPendingBlur]
@@ -148,14 +105,15 @@ export default function LogSessionPage() {
       } else {
         // Focusing a <select> highlights it but doesn't open the iOS picker.
         // showPicker() does, and the stepper tap supplies the user activation
-        // it requires. Not in every browser, and it throws when it can't run,
-        // so a failure just leaves the select focused for a manual tap.
+        // it requires. It throws where unsupported, so failure just leaves the
+        // select focused for a manual tap.
         try {
           (el as HTMLSelectElement & { showPicker?: () => void }).showPicker?.();
         } catch {
           // fall back to plain focus
         }
       }
+      setHeaderFocus(null);
       setFocusedField({ row, field });
     },
     [cancelPendingBlur]
@@ -163,173 +121,77 @@ export default function LogSessionPage() {
 
   useEffect(() => () => cancelPendingBlur(), [cancelPendingBlur]);
 
-  // Hydrate from Supabase (with legacy sessionStorage fallback) and subscribe to Realtime
+  // Maps list. Independent of the draft document, so it stays in the page.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    clientIdRef.current =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const supabase = createClient();
-    supabaseRef.current = supabase;
-
     let cancelled = false;
 
-    (async () => {
-      const [{ data }, { data: mapsData }] = await Promise.all([
-        supabase.from("session_drafts").select("*").eq("id", 1).maybeSingle(),
-        supabase.from("maps").select("name").order("created_at", { ascending: true }),
-      ]);
+    const loadMaps = async () => {
+      const { data, error: mapsError } = await supabase
+        .from("maps")
+        .select("name")
+        .order("created_at", { ascending: true });
+      if (cancelled || mapsError || !data) return;
+      setAvailableMaps(data.map((m: { name: string }) => m.name));
+    };
 
-      if (cancelled) return;
-
-      if (mapsData) {
-        setAvailableMaps(mapsData.map((m: { name: string }) => m.name));
-      }
-
-      const dbGames = normalizeGames(data?.games);
-      const dbHasContent =
-        !!(data?.played_at || data?.label || dbGames.some((g) => g.place || g.kills || g.map));
-
-      if (dbHasContent && data) {
-        skipNextPersistRef.current = true;
-        setDate(data.played_at || todayISO());
-        setLabel(
-          data.label && data.label.length > 0
-            ? data.label
-            : formatLabel(new Date())
-        );
-        setGames(dbGames.length > 0 ? dbGames : [emptyGame()]);
-      } else {
-        // Nothing in shared draft — check legacy sessionStorage draft on this device
-        const legacy = loadLegacyDraft();
-        if (legacy) {
-          setDate(legacy.date || todayISO());
-          setLabel(legacy.label || formatLabel(new Date()));
-          setGames(legacy.games.length > 0 ? legacy.games : [emptyGame()]);
-          clearLegacyDraft();
-          // Do NOT set skip flag — we want this to upload to the shared draft
-        } else {
-          setDate(todayISO());
-          setLabel(formatLabel(new Date()));
-        }
-      }
-      setHydrated(true);
-    })();
-
-    const channel: RealtimeChannel = supabase
-      .channel("session_drafts_changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "session_drafts",
-          filter: "id=eq.1",
-        },
-        (payload) => {
-          const row = (payload.new ?? payload.old) as Record<string, unknown> | null;
-          if (!row) return;
-          if (row.updated_by === clientIdRef.current) return; // ignore our own echo
-
-          skipNextPersistRef.current = true;
-          const incomingDate = typeof row.played_at === "string" ? row.played_at : "";
-          const incomingLabel = typeof row.label === "string" ? row.label : "";
-          const incomingGames = normalizeGames(row.games);
-          setDate(incomingDate || todayISO());
-          setLabel(
-            incomingLabel.length > 0 ? incomingLabel : formatLabel(new Date())
-          );
-          setGames(incomingGames.length > 0 ? incomingGames : [emptyGame()]);
-        }
-      )
-      .subscribe((status) => {
-        setLive(status === "SUBSCRIBED");
-      });
+    void loadMaps();
 
     const mapsChannel: RealtimeChannel = supabase
       .channel("maps_changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "maps" },
-        async () => {
-          const { data: fresh } = await supabase
-            .from("maps")
-            .select("name")
-            .order("created_at", { ascending: true });
-          if (fresh) setAvailableMaps(fresh.map((m: { name: string }) => m.name));
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "maps" }, () => {
+        void loadMaps();
+      })
       .subscribe();
 
     return () => {
       cancelled = true;
-      supabase.removeChannel(channel);
       supabase.removeChannel(mapsChannel);
     };
   }, []);
 
-  // Debounced persist to Supabase
-  useEffect(() => {
-    if (!hydrated) return;
-    if (skipNextPersistRef.current) {
-      skipNextPersistRef.current = false;
-      return;
-    }
-    const supabase = supabaseRef.current;
-    if (!supabase) return;
-
-    const timeout = setTimeout(() => {
-      void supabase.from("session_drafts").upsert({
-        id: 1,
-        played_at: date || null,
-        label,
-        games,
-        updated_by: clientIdRef.current,
-      });
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [date, label, games, hydrated]);
+  // ------------------------------------------------------------- mutations --
+  // Everything below goes through edit(), which is the only path that writes.
 
   function handleDateChange(value: string) {
-    setDate(value);
     const parsed = new Date(value + "T00:00:00");
-    if (!isNaN(parsed.getTime())) {
-      setLabel(formatLabel(parsed));
-    }
+    const nextLabel = isNaN(parsed.getTime()) ? undefined : formatLabel(parsed);
+    edit((d) => ({ ...d, date: value, label: nextLabel ?? d.label }));
   }
 
   function updateGame(index: number, field: "place" | "kills", value: string) {
-    setGames((prev) =>
-      prev.map((g, i) => (i === index ? { ...g, [field]: value } : g))
-    );
+    edit((d) => ({
+      ...d,
+      games: d.games.map((g, i) => (i === index ? { ...g, [field]: value } : g)),
+    }));
   }
 
   function setMap(index: number, value: string) {
-    setGames((prev) =>
-      prev.map((g, i) => (i === index ? { ...g, map: value === "" ? null : value } : g))
-    );
+    edit((d) => ({
+      ...d,
+      games: d.games.map((g, i) =>
+        i === index ? { ...g, map: value === "" ? null : value } : g
+      ),
+    }));
   }
 
   // flushSync so the new row exists before we focus it. On iOS a focus() that
   // lands in a later task loses the user gesture and the keyboard closes.
   function addGame() {
-    let newIndex = 0;
+    const newIndex = games.length;
     flushSync(() => {
-      setGames((prev) => {
-        newIndex = prev.length;
-        return [...prev, emptyGame()];
-      });
+      edit((d) => ({ ...d, games: [...d.games, emptyGame()] }));
     });
     focusField(newIndex, "place");
   }
 
   function removeGame(index: number) {
-    setGames((prev) => prev.filter((_, i) => i !== index));
+    edit((d) => ({ ...d, games: d.games.filter((_, i) => i !== index) }));
     setFocusedField(null);
   }
 
-  // Nothing focused yet: jump to the first field that still needs a value.
+  // ---------------------------------------------------------- field stepper --
+
   function focusFirstEmpty() {
     const row = games.findIndex((g) => !g.place || !g.kills || !g.map);
     if (row === -1) {
@@ -380,6 +242,21 @@ export default function LogSessionPage() {
     setFocusedField(null);
   }
 
+  // ------------------------------------------------------------------ clear --
+
+  function handleClear() {
+    if (!clearArmed) {
+      setClearArmed(true);
+      window.setTimeout(() => setClearArmed(false), 3000);
+      return;
+    }
+    setClearArmed(false);
+    setFocusedField(null);
+    void clear();
+  }
+
+  // ----------------------------------------------------------------- submit --
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -409,13 +286,13 @@ export default function LogSessionPage() {
         return;
       }
       if (map === null) {
-        setError(`Game ${i + 1}: Tap the map button to pick a map.`);
+        setError(`Game ${i + 1}: Pick a map.`);
         return;
       }
       parsedGames.push({ place, kills, map });
     }
 
-    setSaving(true);
+    setSubmitting(true);
     try {
       const supabase = createClient();
       await createSession(supabase, {
@@ -423,14 +300,9 @@ export default function LogSessionPage() {
         label: label.trim(),
         games: parsedGames,
       });
-      // Reset the shared draft for every device
-      await supabase.from("session_drafts").upsert({
-        id: 1,
-        played_at: null,
-        label: null,
-        games: [],
-        updated_by: clientIdRef.current,
-      });
+      // Reset the shared draft for every device, then start fresh here.
+      await clear();
+      clearMirror();
       // Drop the client router cache so Dashboard / Fun Facts / Sessions all
       // recompute with the session that was just saved
       router.refresh();
@@ -438,30 +310,63 @@ export default function LogSessionPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save session.");
     } finally {
-      setSaving(false);
+      setSubmitting(false);
     }
   }
 
-  if (!hydrated) return null;
+  // Same-height skeleton rather than null, so returning to this tab doesn't
+  // flash a blank screen.
+  if (!ready) {
+    return (
+      <div className="space-y-5 pt-6 pb-4" aria-busy="true">
+        <div className="h-9 w-48 animate-pulse rounded-lg bg-surface" />
+        <div className="grid grid-cols-2 gap-3">
+          <div className="h-[70px] animate-pulse rounded-lg bg-surface" />
+          <div className="h-[70px] animate-pulse rounded-lg bg-surface" />
+        </div>
+        <div className="h-32 animate-pulse rounded-xl bg-surface" />
+        <div className="h-12 animate-pulse rounded-lg bg-surface" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5 pt-6 pb-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-3">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">
           Log Session
         </h1>
-        <div
-          className="flex items-center gap-1.5 text-xs text-muted"
-          aria-live="polite"
-        >
-          <span
-            className={`h-2 w-2 rounded-full ${
-              live ? "bg-green-bright" : "bg-muted"
-            }`}
-          />
-          {live ? "Live" : "Offline"}
-        </div>
+        <SyncIndicator
+          status={status}
+          presenceCount={presenceCount}
+          onRetry={() => void retry()}
+        />
       </div>
+
+      {recovery && (
+        <div className="rounded-xl border border-orange/50 bg-orange/10 p-3">
+          <p className="text-sm text-foreground">
+            You had unsaved changes on this phone from before, but the log has
+            changed since. Keep which one?
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={recovery.restore}
+              className="rounded-lg bg-orange px-3 py-2 text-xs font-semibold text-black"
+            >
+              Restore mine
+            </button>
+            <button
+              type="button"
+              onClick={recovery.discard}
+              className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted"
+            >
+              Discard mine
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Date + Label.
@@ -475,6 +380,8 @@ export default function LogSessionPage() {
               type="date"
               value={date}
               onChange={(e) => handleDateChange(e.target.value)}
+              onFocus={() => setHeaderFocus("date")}
+              onBlur={() => setHeaderFocus(null)}
               required
               className="block w-full min-w-0 appearance-none bg-surface border border-border rounded-lg px-3 py-3 text-base text-foreground"
             />
@@ -484,7 +391,9 @@ export default function LogSessionPage() {
             <input
               type="text"
               value={label}
-              onChange={(e) => setLabel(e.target.value)}
+              onChange={(e) => edit((d) => ({ ...d, label: e.target.value }))}
+              onFocus={() => setHeaderFocus("label")}
+              onBlur={() => setHeaderFocus(null)}
               required
               className="block w-full min-w-0 bg-surface border border-border rounded-lg px-3 py-3 text-base text-foreground"
             />
@@ -510,7 +419,11 @@ export default function LogSessionPage() {
               <span />
             </div>
 
-            {/* Rows */}
+            {/* Rows.
+                key={index} is deliberate. Index keys mean an incoming remote
+                update patches `value` on the same DOM nodes instead of
+                replacing them, so the caret and the iOS keyboard survive a
+                sync. Stable ids would blow focus away on every remote apply. */}
             {games.map((game, index) => (
               <div
                 key={index}
@@ -645,10 +558,26 @@ export default function LogSessionPage() {
         {/* Submit */}
         <button
           type="submit"
-          disabled={saving}
+          disabled={submitting}
           className="w-full bg-blue text-white rounded-lg py-4 font-semibold transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? "Saving..." : "Save Session"}
+          {submitting ? "Saving..." : "Save Session"}
+        </button>
+
+        {/* Clear sits away from Save and the stepper: it wipes the other
+            phone's in-progress typing too, so it reads as a danger zone.
+            Two-tap arm instead of window.confirm, which iOS renders as a
+            jarring blocking modal. */}
+        <button
+          type="button"
+          onClick={handleClear}
+          className={`w-full rounded-lg py-3 text-sm font-medium transition-colors ${
+            clearArmed
+              ? "border border-red bg-red/10 text-red"
+              : "border border-border text-muted hover:border-red hover:text-red"
+          }`}
+        >
+          {clearArmed ? "Clear draft? Tap again" : "Clear"}
         </button>
       </form>
     </div>
