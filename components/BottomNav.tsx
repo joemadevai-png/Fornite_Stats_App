@@ -52,6 +52,17 @@ const tabs = [
       </svg>
     ),
   },
+  {
+    label: "Maps",
+    href: "/maps",
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5v-13L15 6.5z" />
+        <line x1="9" y1="4" x2="9" y2="17" />
+        <line x1="15" y1="6.5" x2="15" y2="19.5" />
+      </svg>
+    ),
+  },
 ];
 
 export default function BottomNav() {
@@ -59,19 +70,19 @@ export default function BottomNav() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-surface">
-      <div className="mx-auto flex max-w-[720px] items-center justify-around px-2 pt-2 pb-6">
+      <div className="mx-auto flex max-w-[720px] items-center justify-around px-1 pt-2 pb-6">
         {tabs.map((tab) => {
           const isActive = pathname.startsWith(tab.href);
           return (
             <Link
               key={tab.href}
               href={tab.href}
-              className={`flex flex-col items-center gap-1 px-3 py-1 text-xs font-medium transition-colors ${
+              className={`flex min-w-0 flex-1 flex-col items-center gap-1 px-0.5 py-1 text-[11px] font-medium transition-colors ${
                 isActive ? "text-foreground" : "text-muted"
               }`}
             >
               {tab.icon}
-              <span>{tab.label}</span>
+              <span className="max-w-full truncate">{tab.label}</span>
             </Link>
           );
         })}

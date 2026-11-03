@@ -93,6 +93,17 @@ export async function createSession(
     throw gamesError;
   }
 
+  // Bump recency so the Log dropdown floats these maps to the top next time.
+  // Done on save rather than while the draft is edited, so the dropdown order
+  // stays put mid-session instead of reshuffling between games.
+  const usedMaps = Array.from(new Set(session.games.map((g) => g.map)));
+  if (usedMaps.length > 0) {
+    await supabase
+      .from("maps")
+      .update({ last_used_at: new Date().toISOString() })
+      .in("name", usedMaps);
+  }
+
   return sessionId;
 }
 

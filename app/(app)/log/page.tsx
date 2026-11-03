@@ -130,6 +130,10 @@ export default function LogSessionPage() {
       const { data, error: mapsError } = await supabase
         .from("maps")
         .select("name")
+        // Most recently used first, so the maps you're actually playing this
+        // session sit at the top of the dropdown. Recency only moves on save,
+        // so the order doesn't shuffle while you're entering games.
+        .order("last_used_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: true });
       if (cancelled || mapsError || !data) return;
       setAvailableMaps(data.map((m: { name: string }) => m.name));
