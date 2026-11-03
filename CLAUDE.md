@@ -56,7 +56,7 @@ supabase db push
 Choices already made. Do not re-suggest the alternative.
 
 - **No auth. The app is fully open.** A passcode gate was built and then deliberately removed in `0c261da`. Do not propose adding login back.
-- **Bottom nav has 5 items.** Dashboard, Fun Facts, Sessions, Log, Maps. It was 4 until Joe asked for a Maps tab; the nav uses `flex-1` items and 11px labels to fit five across a 375px iPhone.
+- **Bottom nav has 5 items.** Dashboard, Fun Facts, Sessions, Maps, Log. Log stays bottom-right (Joe asked to keep it there). It was 4 until Joe asked for a Maps tab; the nav uses `flex-1` items and 11px labels to fit five across a 375px iPhone.
 - **Maps are dynamic, not a hardcoded enum.** The list started hardcoded, grew by commits (`33dcfe3` Simpsons, `b7792a3` Adobe) and was finally made data-driven in `006_dynamic_maps.sql`. Add maps through the Maps panel, not in code.
 - **The Log draft is shared and real-time via Supabase Realtime**, not local-only (`15a7f4b`). Edits from one person appear for the other.
 - **Realtime publication changes must assert, not swallow errors.** Migrations 004 and 006 wrapped `ALTER PUBLICATION` in `EXCEPTION WHEN OTHERS THEN NULL`, which hid whether Realtime was ever enabled. `007` re-asserts and raises if membership still is not there. Never reintroduce the silent-exception pattern.

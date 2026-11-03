@@ -42,17 +42,6 @@ const tabs = [
     ),
   },
   {
-    label: "Log",
-    href: "/log",
-    icon: (
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <line x1="12" y1="8" x2="12" y2="16" />
-        <line x1="8" y1="12" x2="16" y2="12" />
-      </svg>
-    ),
-  },
-  {
     label: "Maps",
     href: "/maps",
     icon: (
@@ -60,6 +49,17 @@ const tabs = [
         <path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5v-13L15 6.5z" />
         <line x1="9" y1="4" x2="9" y2="17" />
         <line x1="15" y1="6.5" x2="15" y2="19.5" />
+      </svg>
+    ),
+  },
+  {
+    label: "Log",
+    href: "/log",
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="16" />
+        <line x1="8" y1="12" x2="16" y2="12" />
       </svg>
     ),
   },

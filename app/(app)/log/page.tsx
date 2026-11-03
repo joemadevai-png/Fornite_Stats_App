@@ -58,6 +58,14 @@ export default function LogSessionPage() {
 
   const { date, label, games } = doc;
 
+  // Live kills-per-game for the session in progress. Only rows with a kills
+  // value count, so a freshly added empty row doesn't drag the average down.
+  const killValues = games
+    .map((g) => parseInt(g.kills, 10))
+    .filter((n) => !isNaN(n));
+  const totalKills = killValues.reduce((a, n) => a + n, 0);
+  const avgKills = killValues.length > 0 ? totalKills / killValues.length : null;
+
   const fieldRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement>>(new Map());
   const blurTimerRef = useRef<number | null>(null);
 
@@ -410,7 +418,18 @@ export default function LogSessionPage() {
             <h2 className="text-xs font-medium uppercase tracking-wide text-muted">
               Games
             </h2>
-            <span className="text-xs text-muted">{games.length} game{games.length !== 1 ? "s" : ""}</span>
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-muted">
+                {totalKills} kill{totalKills !== 1 ? "s" : ""} / {killValues.length} game
+                {killValues.length !== 1 ? "s" : ""}
+              </span>
+              <span
+                className="rounded-md bg-blue/15 px-2 py-0.5 text-sm font-semibold text-blue tabular-nums"
+                aria-live="polite"
+              >
+                {avgKills === null ? "-" : avgKills.toFixed(1)} avg K
+              </span>
+            </span>
           </div>
 
           <div className="rounded-xl border border-border bg-surface overflow-hidden">
